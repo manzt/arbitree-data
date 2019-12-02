@@ -911,3 +911,144 @@ connect_tips <- function(pd,
   
   list(stree = igraph::get.adjacency(mst_g), Y = reducedDimK_df, G = G)
 }
+
+compute_partitions <- function(g,
+                               optim_res,
+                               qval_thresh=0.05,
+                               verbose = FALSE){
+  cell_membership <- as.factor(igraph::membership(optim_res))
+  membership_matrix <- Matrix::sparse.model.matrix( ~ cell_membership + 0)
+  num_links <- Matrix::t(membership_matrix) %*%
+    igraph::as_adjacency_matrix(g) %*% membership_matrix
+  diag(num_links) <- 0
+  louvain_modules <- levels(cell_membership)
+  
+  edges_per_module <- Matrix::rowSums(num_links)
+  total_edges <- sum(num_links)
+  
+  theta <- (as.matrix(edges_per_module) / total_edges) %*%
+    Matrix::t(edges_per_module / total_edges)
+  var_null_num_links <- theta * (1 - theta) / total_edges
+  num_links_ij <- num_links / total_edges - theta
+  cluster_mat <- pnorm_over_mat(as.matrix(num_links_ij), var_null_num_links)
+  
+  num_links <- num_links_ij / total_edges
+  
+  cluster_mat <- matrix(stats::p.adjust(cluster_mat),
+                        nrow=length(louvain_modules),
+                        ncol=length(louvain_modules))
+  
+  sig_links <- as.matrix(num_links)
+  sig_links[cluster_mat > qval_thresh] = 0
+  diag(sig_links) <- 0
+  
+  cluster_g <- igraph::graph_from_adjacency_matrix(sig_links, weighted = T,
+                                                   mode = 'undirected')
+  
+  list(cluster_g = cluster_g, num_links = num_links, cluster_mat = cluster_mat)
+}
+
+louvain_clustering <- function(data,
+                               pd,
+                               k = 20,
+                               weight = F,
+                               louvain_iter = 1,
+                               random_seed = 0L,
+                               verbose = F, ...) {
+  extra_arguments <- list(...)
+  cell_names <- row.names(pd)
+  if(!identical(cell_names, row.names(pd)))
+    stop("Phenotype and row name from the data doesn't match")
+  
+  if (is.data.frame(data))
+    data <- as.matrix(data)
+  if (!is.matrix(data))
+    stop("Wrong input data, should be a data frame of matrix!")
+  if (k < 1) {
+    stop("k must be a positive integer!")
+  } else if (k > nrow(data) - 2) {
+    k <- nrow(data) - 2
+    warning(paste("RANN counts the point itself, k must be smaller than\nthe",
+                  "total number of points - 1 (all other points) - 1",
+                  "(itself)!"))
+  }
+  if (verbose) {
+    message("Run kNN based graph clustering starts:", "\n",
+            "  -Input data of ", nrow(data), " rows and ", ncol(data),
+            " columns", "\n", "  -k is set to ", k)
+    message("  Finding nearest neighbors...")
+  }
+  
+  t1 <- system.time(tmp <- RANN::nn2(data, data, k +
+                                       1, searchtype = "standard"))
+  neighborMatrix <- tmp[[1]][, -1]
+  distMatrix <- tmp[[2]][, -1]
+  if (verbose)
+    message("DONE. Run time: ", t1[3], "s\n", " Compute jaccard coefficient between nearest-neighbor sets ..." )
+  
+  t2 <- system.time(links <- jaccard_coeff(neighborMatrix,
+                                           weight))
+  if (verbose)
+    message("DONE. Run time:", t2[3], "s\n", " Build undirected graph from the weighted links ...")
+  
+  links <- links[links[, 1] > 0, ]
+  relations <- as.data.frame(links)
+  colnames(relations) <- c("from", "to", "weight")
+  
+  relations$from <- cell_names[relations$from]
+  relations$to <- cell_names[relations$to]
+  t3 <- system.time(g <- igraph::graph.data.frame(relations, directed = FALSE))
+  if (verbose)
+    message("DONE ~", t3[3], "s\n Run louvain clustering on the graph ...\n")
+  
+  t_start <- Sys.time()
+  Qp <- -1
+  optim_res <- NULL
+  best_max_resolution <- 'No resolution'
+  
+  if(louvain_iter >= 2) {
+    random_seed <- NULL
+  }
+  
+  for (iter in 1:louvain_iter) {
+    if(verbose) {
+      cat("Running louvain iteration ", iter, "...\n")
+    }
+    
+    Q <- igraph::cluster_louvain(g)
+    
+    if (is.null(optim_res)) {
+      Qp <- max(Q$modularity)
+      optim_res <- Q
+    }
+    else {
+      Qt <- max(Q$modularity)
+      if (Qt > Qp) {
+        optim_res <- Q
+        Qp <- Qt
+      }
+    }
+  }
+  if(verbose)
+    message('Maximal modularity is ', Qp, '; corresponding resolution is ',
+            best_max_resolution)
+  t_end <- Sys.time()
+  if (verbose) {
+    message("\nRun kNN based graph clustering DONE, totally takes ", t_end -
+              t_start, " s.")
+    cat("  -Number of clusters:",
+        length(unique(igraph::membership(optim_res))), "\n")
+  }
+  
+  if(igraph::vcount(g) < 3000) {
+    coord <- NULL
+    edge_links <- NULL
+  } else {
+    coord <- NULL
+    edge_links <- NULL
+  }
+  
+  igraph::V(g)$names <- as.character(igraph::V(g))
+  return(list(g = g, relations = relations, distMatrix = distMatrix,
+              coord = coord, edge_links = edge_links, optim_res = optim_res))
+}
