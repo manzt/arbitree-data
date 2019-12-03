@@ -1,0 +1,71 @@
+---
+title: "arbitree-data"
+author: "Trevor Manz & Dan Weiner"
+date: "12/1/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(monocle3)
+library(tidyverse)
+
+# vendored source from monocle
+source('./src/multi_component_RGE.R')
+source('./src/learn_graph.R')
+Rcpp::sourceCpp("./src/clustering.cpp")
+```
+
+Load a dataset
+```{r}
+expression_matrix <- readRDS(url("http://staff.washington.edu/hpliner/data/packer_embryo_expression.rds"))
+cell_metadata <- readRDS(url("http://staff.washington.edu/hpliner/data/packer_embryo_colData.rds"))
+gene_annotation <- readRDS(url("http://staff.washington.edu/hpliner/data/packer_embryo_rowData.rds"))
+
+cds <- new_cell_data_set(expression_matrix, cell_metadata = cell_metadata, gene_metadata = gene_annotation)
+```
+
+Preprocess
+```{r}
+cds <- preprocess_cds(cds, num_dim = 50)
+cds <- align_cds(
+  cds, 
+  alignment_group = "batch", 
+  residual_model_formula_str = "~ bg.300.loading + bg.400.loading + bg.500.1.loading + bg.500.2.loading + bg.r17.loading + bg.b01.loading + bg.b02.loading"
+)
+```
+
+Dimensionality reduction with UMAP
+```{r}
+cds <- reduce_dimension(cds)
+plot_cells(cds, label_groups_by_cluster=FALSE,  color_cells_by = "cell.type")
+```
+
+Cluster cells
+```{r}
+cds <- cluster_cells(cds)
+plot_cells(cds, color_cells_by = "partition")
+```
+
+Exploring `learn_graph` function:
+
+```{r}
+# normal functionality
+cds <- learn_graph_(cds, use_partition = FALSE, verbose=TRUE)
+plot_cells(cds)
+```
+
+```{r}
+# mtest is an matrix of 2xN, where the columns are x,y coords and N is the number of "metioids"
+t = seq(0, 2*pi, length.out=630)
+mtest = rbind(sin(t), cos(t)) * 10
+plot(t(mtest))
+```
+
+## Use user defined medioids instead
+```{r}
+cds <- learn_graph_(cds, medioids = mtest, use_partition = FALSE, verbose=TRUE)
+plot_cells(cds)
+```
+
+
