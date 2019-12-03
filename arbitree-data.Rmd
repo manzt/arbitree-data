@@ -57,8 +57,8 @@ plot_cells(cds)
 
 ```{r}
 # mtest is an matrix of 2xN, where the columns are x,y coords and N is the number of "metioids"
-t = seq(0, 2*pi, length.out=630)
-mtest = rbind(sin(t), cos(t)) * 10
+t = seq(-1, 1, length.out=100)
+mtest = rbind(t,-t) * 10
 plot(t(mtest))
 ```
 
