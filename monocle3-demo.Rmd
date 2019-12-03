@@ -10,81 +10,8 @@ knitr::opts_chunk$set(echo = TRUE)
 library(monocle3)
 library(tidyverse)
 library(patchwork)
-source('~/Desktop/monocle/multi_component_RGE.R')
-source('~/Desktop/monocle/learn_graph.R')
-```
-
-Load a dataset
-```{r}
-expression_matrix <- readRDS(url("http://staff.washington.edu/hpliner/data/packer_embryo_expression.rds"))
-cell_metadata <- readRDS(url("http://staff.washington.edu/hpliner/data/packer_embryo_colData.rds"))
-gene_annotation <- readRDS(url("http://staff.washington.edu/hpliner/data/packer_embryo_rowData.rds"))
-
-cds <- new_cell_data_set(expression_matrix, cell_metadata = cell_metadata, gene_metadata = gene_annotation)
-```
-
-Preprocess
-```{r}
-cds <- preprocess_cds(cds, num_dim = 50)
-cds <- align_cds(
-  cds, 
-  alignment_group = "batch", 
-  residual_model_formula_str = "~ bg.300.loading + bg.400.loading + bg.500.1.loading + bg.500.2.loading + bg.r17.loading + bg.b01.loading + bg.b02.loading"
-)
-```
-
-Dimensionality reduction with UMAP
-```{r}
-cds <- reduce_dimension(cds)
-plot_cells(cds, label_groups_by_cluster=FALSE,  color_cells_by = "cell.type")
-```
-
-Cluster cells
-```{r}
-cds <- cluster_cells(cds)
-plot_cells(cds, color_cells_by = "partition")
-```
-
-Exploring `learn_graph` function:
-
-```{r}
-compute_partitions <- function(g,
-                               optim_res,
-                               qval_thresh=0.05,
-                               verbose = FALSE){
-  cell_membership <- as.factor(igraph::membership(optim_res))
-  membership_matrix <- Matrix::sparse.model.matrix( ~ cell_membership + 0)
-  num_links <- Matrix::t(membership_matrix) %*%
-    igraph::as_adjacency_matrix(g) %*% membership_matrix
-  diag(num_links) <- 0
-  louvain_modules <- levels(cell_membership)
-
-  edges_per_module <- Matrix::rowSums(num_links)
-  total_edges <- sum(num_links)
-
-  theta <- (as.matrix(edges_per_module) / total_edges) %*%
-    Matrix::t(edges_per_module / total_edges)
-  var_null_num_links <- theta * (1 - theta) / total_edges
-  num_links_ij <- num_links / total_edges - theta
-  cluster_mat <- pnorm_over_mat(as.matrix(num_links_ij), var_null_num_links)
-
-  num_links <- num_links_ij / total_edges
-
-  cluster_mat <- matrix(stats::p.adjust(cluster_mat),
-                        nrow=length(louvain_modules),
-                        ncol=length(louvain_modules))
-
-  sig_links <- as.matrix(num_links)
-  sig_links[cluster_mat > qval_thresh] = 0
-  diag(sig_links) <- 0
-
-  cluster_g <- igraph::graph_from_adjacency_matrix(sig_links, weighted = T,
-                                                   mode = 'undirected')
-
-  list(cluster_g = cluster_g, num_links = num_links, cluster_mat = cluster_mat)
-}
-
-
+source('./multi_component_RGE.R')
+source('./learn_graph.R')
 ```
 
 ```{Rcpp}
@@ -176,144 +103,38 @@ edges$C = edges$C/max(edges$C)
 */
 ```
 
+Load a dataset
 ```{r}
-rge <- function(cds, init_pos) {
-  dp_mst <- NULL
-  pr_graph_cell_proj_closest_vertex <- NULL
-  cell_name_vec <- NULL
-  reducedDimK_coord <- NULL
-  merge_rge_res <- NULL
-  max_ncenter <- 0
-  
-  
-  
-  medioids <- init_pos
-  graph_args <- list(
-    X = X_subset, 
-    C0 = medioids, 
-    maxiter = maxiter,
-    eps = eps, 
-    L1.gamma = L1.gamma, 
-    L1.sigma = L1.sigma,
-    verbose = verbose
-  )
+expression_matrix <- readRDS(url("http://staff.washington.edu/hpliner/data/packer_embryo_expression.rds"))
+cell_metadata <- readRDS(url("http://staff.washington.edu/hpliner/data/packer_embryo_colData.rds"))
+gene_annotation <- readRDS(url("http://staff.washington.edu/hpliner/data/packer_embryo_rowData.rds"))
 
-  rge_res <- do.call(calc_principal_graph, graph_args)
-
-  names(rge_res)[c(2, 4, 5)] <- c('Y', 'R','objective_vals')
-  stree <- rge_res$W
-  stree_ori <- stree
-  
-  if(close_loop) {
-    reduce_dims_old <- t(reducedDims(cds)[[reduction_method]])[, partition_list == cur_comp]
-    connect_tips_res <-connect_tips(
-      colData(cds)[partition_list == cur_comp, ],
-      R = rge_res$R,
-      stree = stree,
-      reducedDimK_old = rge_res$Y,
-      reducedDimS_old = reduce_dims_old,
-      kmean_res = kmean_res,
-      euclidean_distance_ratio = euclidean_distance_ratio,
-      geodesic_distance_ratio = geodesic_distance_ratio,
-      medioids = medioids,
-      verbose = verbose
-    )
-    stree <- connect_tips_res$stree
-  }
-  
-  if(prune_graph) {
-    if(verbose) {
-      message('Running graph pruning ...')
-    }
-    stree <- prune_tree(stree_ori, as.matrix(stree), minimal_branch_len = minimal_branch_len)
-    # remove the points in Y; mediods, etc.
-    rge_res$Y <- rge_res$Y[, match(row.names(stree), row.names(stree_ori))]
-    rge_res$R <- rge_res$R[, match(row.names(stree), row.names(stree_ori))]
-    medioids <- medioids[, row.names(stree)]
-  }
-
-  if(is.null(merge_rge_res)) {
-    colnames(rge_res$Y) <- paste0('Y_', 1:ncol(rge_res$Y))
-    merge_rge_res <- rge_res
-    colnames(merge_rge_res$X) <- colnames(X_subset)
-    row.names(merge_rge_res$R) <- colnames(X_subset)
-    colnames(merge_rge_res$R) <- paste0('Y_', 1:ncol(merge_rge_res$Y))
-    merge_rge_res$R <- list(merge_rge_res$R)
-    merge_rge_res$stree <- list(stree)
-    merge_rge_res$objective_vals <- list(merge_rge_res$objective_vals)
-  } else {
-    colnames(rge_res$X) <- colnames(X_subset)
-    row.names(rge_res$R) <- colnames(X_subset)
-    colnames(rge_res$R) <-paste0('Y_', (ncol(merge_rge_res$Y) + 1):(ncol(merge_rge_res$Y) + ncol(rge_res$Y)), sep = "")
-    colnames(rge_res$Y) <- paste("Y_", (ncol(merge_rge_res$Y) + 1):(ncol(merge_rge_res$Y) + ncol(rge_res$Y)), sep = "")
-    merge_rge_res$Y <- cbind(merge_rge_res$Y, rge_res$Y)
-    merge_rge_res$R <- c(merge_rge_res$R, list(rge_res$R))
-    merge_rge_res$stree <- c(merge_rge_res$stree, list(stree))
-    merge_rge_res$objective_vals <- c(merge_rge_res$objective_vals, list(rge_res$objective_vals))
-  }
-  
-  if(is.null(reducedDimK_coord)) {
-    curr_cell_names <- paste("Y_", 1:ncol(rge_res$Y), sep = "")
-    pr_graph_cell_proj_closest_vertex <- matrix(apply(rge_res$R, 1, which.max))
-    cell_name_vec <- colnames(X_subset)
-  } else {
-    curr_cell_names <- paste("Y_", (ncol(reducedDimK_coord) + 1):(ncol(reducedDimK_coord) + ncol(rge_res$Y)), sep = "")
-    pr_graph_cell_proj_closest_vertex <- rbind(pr_graph_cell_proj_closest_vertex, matrix(apply(rge_res$R, 1, which.max) + ncol(reducedDimK_coord)))
-    cell_name_vec <- c(cell_name_vec, colnames(X_subset))
-  }
-
-  curr_reducedDimK_coord <- rge_res$Y
-  dimnames(stree) <- list(curr_cell_names, curr_cell_names)
-  cur_dp_mst <- igraph::graph.adjacency(stree, mode = "undirected", weighted = TRUE)
-
-  dp_mst <- igraph::graph.union(dp_mst, cur_dp_mst)
-  reducedDimK_coord <- cbind(reducedDimK_coord, curr_reducedDimK_coord)
-
-  row.names(pr_graph_cell_proj_closest_vertex) <- cell_name_vec
-
-  ddrtree_res_W <- as.matrix(rge_res$W)
-  ddrtree_res_Z <- reducedDims(cds)[[reduction_method]]
-  ddrtree_res_Y <- reducedDimK_coord
-
-  R <- Matrix::sparseMatrix(i = 1, j = 1, x = 0, dims = c(ncol(cds), ncol(merge_rge_res$Y)))
-  stree <- Matrix::sparseMatrix(i = 1, j = 1, x = 0, dims = c(ncol(merge_rge_res$Y), ncol(merge_rge_res$Y)))
-  curr_row_id <- 1
-  curr_col_id <- 1
-  R_row_names <- NULL
-  for(i in 1:length(merge_rge_res$R)) {
-    current_R <- merge_rge_res$R[[i]]
-
-    stree[
-      curr_col_id:(curr_col_id + ncol(current_R) - 1),
-      curr_col_id:(curr_col_id + ncol(current_R) - 1)
-    ] <- merge_rge_res$stree[[i]]
-
-    curr_row_id <- curr_row_id + nrow(current_R)
-    curr_col_id <- curr_col_id + ncol(current_R)
-    R_row_names <- c(R_row_names, row.names(current_R))
-  }
-
-  row.names(R) <- R_row_names
-  R <- R[colnames(cds), ] # reorder the colnames
-
-  cds@principal_graph_aux[[reduction_method]] <- list(
-    stree = stree,
-    Q = merge_rge_res$Q,
-    R = R,
-    objective_vals = merge_rge_res$objective_vals,
-    history = merge_rge_res$history
-  )
-  
-  cds@principal_graph_aux[[reduction_method]]$pr_graph_cell_proj_closest_vertex <- as.data.frame(pr_graph_cell_proj_closest_vertex)[colnames(cds), , drop = F]
-  colnames(ddrtree_res_Y) <- paste0("Y_", 1:ncol(ddrtree_res_Y), sep = "")
-
-  return(list(cds = cds,
-              ddrtree_res_W = ddrtree_res_W,
-              ddrtree_res_Z = ddrtree_res_Z,
-              ddrtree_res_Y = ddrtree_res_Y,
-              dp_mst = dp_mst))
-}
+cds <- new_cell_data_set(expression_matrix, cell_metadata = cell_metadata, gene_metadata = gene_annotation)
 ```
+
+Preprocess
+```{r}
+cds <- preprocess_cds(cds, num_dim = 50)
+cds <- align_cds(
+  cds, 
+  alignment_group = "batch", 
+  residual_model_formula_str = "~ bg.300.loading + bg.400.loading + bg.500.1.loading + bg.500.2.loading + bg.r17.loading + bg.b01.loading + bg.b02.loading"
+)
+```
+
+Dimensionality reduction with UMAP
+```{r}
+cds <- reduce_dimension(cds)
+plot_cells(cds, label_groups_by_cluster=FALSE,  color_cells_by = "cell.type")
+```
+
+Cluster cells
+```{r}
+cds <- cluster_cells(cds)
+plot_cells(cds, color_cells_by = "partition")
+```
+
+Exploring `learn_graph` function:
 
 ```{r}
 p1 = bind_rows(
@@ -334,7 +155,24 @@ p2 = bind_rows(
 ```
 
 ```{r}
-cds <- learn_graph_(cds)
+cds <- learn_graph_(cds, use_partition = FALSE, verbose=TRUE)
 plot_cells(cds)
 ```
+
+```{r}
+# example with random data
+t = seq(0, 2*pi, length.out=630)
+mtest = rbind(
+  sin(t),
+  cos(t)
+) * 10
+plot(t(mtest))
+```
+
+
+```{r}
+cds <- learn_graph_(cds, medioids = mtest, use_partition = FALSE, verbose=TRUE)
+plot_cells(cds)
+```
+
 

@@ -1,4 +1,4 @@
-learn_graph_ <- function(cds, use_partition = TRUE, close_loop = TRUE, learn_graph_control = NULL, verbose = FALSE) {
+learn_graph_ <- function(cds, medioids=NULL, k=NULL, use_partition = TRUE, close_loop = TRUE, learn_graph_control = NULL, verbose = FALSE) {
   reduction_method <- "UMAP"
   
   # Create defaults
@@ -72,7 +72,10 @@ learn_graph_ <- function(cds, use_partition = TRUE, close_loop = TRUE, learn_gra
   }
   
   multi_tree_DDRTree_res <- multi_component_RGE(
-    cds, scale = scale,
+    cds, 
+    medioids = medioids,
+    k_init = k,
+    scale = scale,
     reduction_method = reduction_method,
     partition_list = partition_list,
     irlba_pca_res = reducedDims(cds)[[reduction_method]],

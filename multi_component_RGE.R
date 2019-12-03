@@ -1,4 +1,6 @@
 multi_component_RGE <- function(cds,
+                                medioids = NULL,
+                                k_init = NULL,
                                 scale = FALSE,
                                 reduction_method,
                                 partition_list,
@@ -53,49 +55,53 @@ multi_component_RGE <- function(cds,
       message(paste("Using", curr_ncenter, "nodes for principal graph"))
     
     kmean_res <- NULL
-    
-    centers <- t(X_subset)[seq(1, ncol(X_subset), length.out=curr_ncenter), , drop = F]
-    centers <- centers + matrix(stats::rnorm(length(centers), sd = 1e-10), nrow = nrow(centers)) # add random noise
-    
-    kmean_res <- tryCatch({
-      stats::kmeans(t(X_subset), centers=centers, iter.max = 100)
-    }, error = function(err) {
-      stats::kmeans(t(X_subset), centers = curr_ncenter, iter.max = 100)
-    })
-    
-    if (kmean_res$ifault != 0){
-      message(paste("Warning: kmeans returned ifault =", kmean_res$ifault))
+    if (is.null(medioids)) {
+      centers <- t(X_subset)[seq(1, ncol(X_subset), length.out=curr_ncenter), , drop = F]
+      centers <- centers + matrix(stats::rnorm(length(centers), sd = 1e-10), nrow = nrow(centers)) # add random noise
+      
+      kmean_res <- tryCatch({
+        stats::kmeans(t(X_subset), centers = centers, iter.max = 100)
+      }, error = function(err) {
+        stats::kmeans(t(X_subset), centers = curr_ncenter, iter.max = 100)
+      })
+      
+      if (kmean_res$ifault != 0){
+        message(paste("Warning: kmeans returned ifault =", kmean_res$ifault))
+      }
+      nearest_center <- find_nearest_vertex(t(kmean_res$centers), X_subset, process_targets_in_blocks=TRUE)
+      medioids <- X_subset[, unique(nearest_center)]
+      reduced_dim_res <- t(medioids)
+      k <- k_init
+      mat <- t(X_subset)
+      if (is.null(k)) {
+        k <- round(sqrt(nrow(mat))/2)
+        k <- max(10, k)
+      }
+      if (verbose)
+        message("Finding kNN using RANN with ", k, " neighbors")
+      dx <- RANN::nn2(mat, k = min(k, nrow(mat) - 1))
+      nn.index <- dx$nn.idx[, -1]
+      nn.dist <- dx$nn.dists[, -1]
+      
+      if (verbose)
+        message("Calculating the local density for each sample based on kNNs ...")
+      
+      rho <- exp(-rowMeans(nn.dist))
+      mat_df <- as.data.frame(mat)
+      tmp <- mat_df %>% tibble::rownames_to_column() %>%
+        dplyr::mutate(cluster = kmean_res$cluster, density = rho) %>%
+        dplyr::group_by(cluster) %>% dplyr::top_n(n = 1, wt = density) %>%
+        dplyr::arrange(-dplyr::desc(cluster))
+      
+      # select representative cells by highest density
+      medioids <- X_subset[, tmp$rowname]
+    } else {
+      nearest_center <- find_nearest_vertex(medioids, X_subset, process_targets_in_blocks=TRUE)
+      medioids <- X_subset[, unique(nearest_center)]
     }
-    nearest_center <- find_nearest_vertex(t(kmean_res$centers), X_subset,
-                                          process_targets_in_blocks=TRUE)
-    medioids <- X_subset[, unique(nearest_center)]
-    reduced_dim_res <- t(medioids)
-    k <- 25
-    mat <- t(X_subset)
-    if (is.null(k)) {
-      k <- round(sqrt(nrow(mat))/2)
-      k <- max(10, k)
-    }
-    if (verbose)
-      message("Finding kNN using RANN with ", k, " neighbors")
-    dx <- RANN::nn2(mat, k = min(k, nrow(mat) - 1))
-    nn.index <- dx$nn.idx[, -1]
-    nn.dist <- dx$nn.dists[, -1]
-    
-    if (verbose)
-      message("Calculating the local density for each sample based on kNNs ...")
-    
-    rho <- exp(-rowMeans(nn.dist))
-    mat_df <- as.data.frame(mat)
-    tmp <- mat_df %>% tibble::rownames_to_column() %>%
-      dplyr::mutate(cluster = kmean_res$cluster, density = rho) %>%
-      dplyr::group_by(cluster) %>% dplyr::top_n(n = 1, wt = density) %>%
-      dplyr::arrange(-dplyr::desc(cluster))
-    
-    # select representative cells by highest density
-    medioids <- X_subset[, tmp$rowname]
     
     reduced_dim_res <- t(medioids)
+    
     graph_args <- list(X = X_subset, C0 = medioids, maxiter = maxiter,
                        eps = eps, L1.gamma = L1.gamma, L1.sigma = L1.sigma,
                        verbose = verbose)
@@ -106,20 +112,22 @@ multi_component_RGE <- function(cds,
     stree <- rge_res$W
     
     stree_ori <- stree
+    
+    
     if(close_loop) {
-      reduce_dims_old <-
-        t(reducedDims(cds)[[reduction_method]])[, partition_list == cur_comp]
-      connect_tips_res <-
-        connect_tips(colData(cds)[partition_list == cur_comp, ],
-                     R = rge_res$R,
-                     stree = stree,
-                     reducedDimK_old = rge_res$Y,
-                     reducedDimS_old = reduce_dims_old,
-                     kmean_res = kmean_res,
-                     euclidean_distance_ratio = euclidean_distance_ratio,
-                     geodesic_distance_ratio = geodesic_distance_ratio,
-                     medioids = medioids,
-                     verbose = verbose)
+      reduce_dims_old <- t(reducedDims(cds)[[reduction_method]])[, partition_list == cur_comp]
+      connect_tips_res <- connect_tips(
+        colData(cds)[partition_list == cur_comp, ],
+        R = rge_res$R,
+        stree = stree,
+        reducedDimK_old = rge_res$Y,
+        reducedDimS_old = reduce_dims_old,
+        kmean_res = kmean_res,
+        euclidean_distance_ratio = euclidean_distance_ratio,
+        geodesic_distance_ratio = geodesic_distance_ratio,
+        medioids = medioids,
+        verbose = verbose
+      )
       stree <- connect_tips_res$stree
     }
     if(prune_graph) {
