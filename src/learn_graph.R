@@ -1,4 +1,4 @@
-learn_graph_ <- function(cds, medioids=NULL, k=NULL, use_partition = TRUE, close_loop = TRUE, learn_graph_control = NULL, verbose = FALSE) {
+learn_graph_ <- function(cds, medioids=NULL, k=NULL, k_louvain = 25, use_partition = TRUE, close_loop = TRUE, learn_graph_control = NULL, verbose = FALSE) {
   reduction_method <- "UMAP"
   
   # Create defaults
@@ -75,6 +75,7 @@ learn_graph_ <- function(cds, medioids=NULL, k=NULL, use_partition = TRUE, close
     cds, 
     medioids = medioids,
     k_init = k,
+    k_louvain = k_louvain,
     scale = scale,
     reduction_method = reduction_method,
     partition_list = partition_list,

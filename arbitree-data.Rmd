@@ -57,14 +57,17 @@ plot_cells(cds)
 
 ```{r}
 # mtest is an matrix of 2xN, where the columns are x,y coords and N is the number of "metioids"
-t = seq(-1, 1, length.out=100)
-mtest = rbind(t,-t) * 10
+t = seq(0, 2*pi, length.out=1000)
+mtest = rbind(
+  sin(t),
+  cos(t)
+) * 10
 plot(t(mtest))
 ```
 
 ## Use user defined medioids instead
 ```{r}
-cds <- learn_graph_(cds, medioids = mtest, use_partition = FALSE, verbose=TRUE)
+cds <- learn_graph_(cds, medioids = mtest, use_partition = FALSE, verbose=TRUE, k=100, k_louvain = 1000)
 plot_cells(cds)
 ```
 
